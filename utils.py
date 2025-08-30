@@ -5,7 +5,7 @@ from einops import rearrange
 from typing import List
 
 from hunyuanvideo_foley.utils.feature_utils import encode_text_feat, encode_video_with_siglip2, encode_video_with_sync
-
+from hunyuanvideo_foley.utils.config_utils import AttributeDict
 
 @torch.inference_mode()
 def encode_video_features_via_images(
@@ -106,10 +106,10 @@ def feature_process_from_images(
         text_feat = text_feat[:, :text_seq_length]
         uncond_text_feat = uncond_text_feat[:, :text_seq_length]
 
-    text_feats = {
+    text_feats = AttributeDict({
         "text_feat": text_feat,
         "uncond_text_feat": uncond_text_feat,
-    }
+    })
 
     # No need for AttributeDict here anymore, we are using plain dictionaries
     visual_feats = AttributeDict({

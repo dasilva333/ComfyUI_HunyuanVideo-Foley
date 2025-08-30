@@ -151,6 +151,8 @@ class HunyuanFoleyAudio:
         # match CLI return: first item
         return audio_batch[0], sample_rate
 
+    # foley_audio.py
+
     def generate(
         self,
         images: torch.Tensor,
@@ -163,36 +165,52 @@ class HunyuanFoleyAudio:
         device: str = "cuda",
         gpu_id: int = 0,
     ):
-        frames = _images_tensor_to_uint8_list(images)
+        # --- ADD A TRY BLOCK HERE ---
+        try:
+            frames = _images_tensor_to_uint8_list(images)
+            
+            # VRAM frame size cap
+            MAX_FRAMES = 64  # Limit the number of frames to 64
+
+            # If the number of frames exceeds MAX_FRAMES, downsample the frames
+            if len(frames) > MAX_FRAMES:
+                step = math.ceil(len(frames) / MAX_FRAMES)
+                frames = frames[::step]
+
+            if len(frames) == 0:
+                silent = torch.zeros(1, 1, 1, dtype=torch.float32)
+                return ({"waveform": silent, "sample_rate": 44100},)
+
+            # 1) Load / reuse model on requested device
+            model_dict, cfg = _ensure_model_loaded(model_path_dir, config_path, device=device, gpu_id=gpu_id)
+
+            # 2) Infer (mirrors the original infer() flow, but from in-mem frames)
+            audio_tensor, sample_rate = self._infer_from_images(
+                frames, audio_prompt, model_dict, cfg, guidance_scale, num_inference_steps, fps_hint=float(frame_rate)
+            )
+
+            # 3) Shape to VHS expected format: [1, C, S] float32
+            waveform = audio_tensor.to(torch.float32)
+            if waveform.ndim == 1:  # [S] -> [1,S]
+                waveform = waveform.unsqueeze(0)
+            # audio is [C,S]; wrap batch dim
+            waveform = waveform.unsqueeze(0)  # [1, C, S]
+
+            return ({"waveform": waveform, "sample_rate": int(sample_rate)},)
         
-        # VRAM frame size cap
-        MAX_FRAMES = 64  # Limit the number of frames to 64
-
-        # If the number of frames exceeds MAX_FRAMES, downsample the frames
-        if len(frames) > MAX_FRAMES:
-            step = math.ceil(len(frames) / MAX_FRAMES)
-            frames = frames[::step]
-
-        if len(frames) == 0:
-            silent = torch.zeros(1, 1, 1, dtype=torch.float32)
-            return ({"waveform": silent, "sample_rate": 44100},)
-
-        # 1) Load / reuse model on requested device
-        model_dict, cfg = _ensure_model_loaded(model_path_dir, config_path, device=device, gpu_id=gpu_id)
-
-        # 2) Infer (mirrors the original infer() flow, but from in-mem frames)
-        audio_tensor, sample_rate = self._infer_from_images(
-            frames, audio_prompt, model_dict, cfg, guidance_scale, num_inference_steps, fps_hint=float(frame_rate)
-        )
-
-        # 3) Shape to VHS expected format: [1, C, S] float32
-        waveform = audio_tensor.to(torch.float32)
-        if waveform.ndim == 1:  # [S] -> [1,S]
-            waveform = waveform.unsqueeze(0)
-        # audio is [C,S]; wrap batch dim
-        waveform = waveform.unsqueeze(0)  # [1, C, S]
-
-        return ({"waveform": waveform, "sample_rate": int(sample_rate)},)
+        # --- ADD THE FINALLY BLOCK HERE ---
+        finally:
+            # Clean up any large tensors that might be lingering
+            if 'audio_tensor' in locals():
+                del audio_tensor
+            if 'waveform' in locals():
+                del waveform
+            
+            # Force PyTorch to release cached memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
 
 
 # --------------------------------------------------------------------------
