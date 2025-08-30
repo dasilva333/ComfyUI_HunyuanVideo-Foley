@@ -112,10 +112,10 @@ def feature_process_from_images(
     }
 
     # No need for AttributeDict here anymore, we are using plain dictionaries
-    visual_feats = {
+    visual_feats = AttributeDict({
         "siglip2_feat": visual_feats["siglip2_feat"],
         "syncformer_feat": visual_feats["syncformer_feat"]
-    }
+    })
 
     return visual_feats, text_feats, audio_len_in_s
 
