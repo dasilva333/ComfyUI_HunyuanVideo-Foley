@@ -1,0 +1,212 @@
+{
+  "id": "8ad02bc1-1d88-4c98-a8a3-9711bf96f25a",
+  "revision": 0,
+  "last_node_id": 3,
+  "last_link_id": 3,
+  "nodes": [
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [
+        277.3863220214844,
+        174.7039031982422
+      ],
+      "size": [
+        274.080078125,
+        314
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1,
+            2
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "widget_ue_connectable": {}
+      },
+      "widgets_values": [
+        "0a29085f-88cb-4d74-9128-ff14b50d74ea_0.webp",
+        "image"
+      ]
+    },
+    {
+      "id": 1,
+      "type": "HunyuanFoleyAudio",
+      "pos": [
+        590.0090942382812,
+        262.33111572265625
+      ],
+      "size": [
+        400,
+        256
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "HunyuanFoleyAudio",
+        "widget_ue_connectable": {}
+      },
+      "widgets_values": [
+        8,
+        "suspenseful piano with rising tension; two-hit sting (ta-dum)",
+        "E:\\CUIPP\\ComfyUI\\custom_nodes\\ComfyUI_HunyuanVideo-Foley\\HunyuanVideo-Foley\\HunyuanVideo-Foley",
+        "E:\\CUIPP\\ComfyUI\\custom_nodes\\ComfyUI_HunyuanVideo-Foley\\HunyuanVideo-Foley\\configs\\hunyuanvideo-foley-xxl.yaml",
+        10,
+        4.5,
+        "cuda",
+        0
+      ]
+    },
+    {
+      "id": 3,
+      "type": "VHS_VideoCombine",
+      "pos": [
+        1066.850341796875,
+        182.39663696289062
+      ],
+      "size": [
+        214.7587890625,
+        529.00927734375
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": 3
+        },
+        {
+          "name": "meta_batch",
+          "shape": 7,
+          "type": "VHS_BatchManager",
+          "link": null
+        },
+        {
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "Filenames",
+          "type": "VHS_FILENAMES",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VHS_VideoCombine",
+        "widget_ue_connectable": {}
+      },
+      "widgets_values": {
+        "frame_rate": 8,
+        "loop_count": 0,
+        "filename_prefix": "AnimateDiff",
+        "format": "video/h265-mp4",
+        "pix_fmt": "yuv420p10le",
+        "crf": 22,
+        "save_metadata": true,
+        "pingpong": false,
+        "save_output": true,
+        "videopreview": {
+          "hidden": false,
+          "paused": false,
+          "params": {
+            "filename": "AnimateDiff_00001-audio.mp4",
+            "subfolder": "",
+            "type": "output",
+            "format": "video/h265-mp4",
+            "frame_rate": 8,
+            "workflow": "AnimateDiff_00001.png",
+            "fullpath": "E:\\CUIPP\\ComfyUI\\output\\AnimateDiff_00001-audio.mp4"
+          }
+        }
+      }
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      1,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "IMAGE"
+    ],
+    [
+      3,
+      1,
+      0,
+      3,
+      1,
+      "AUDIO"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ue_links": [],
+    "links_added_by_ue": [],
+    "ds": {
+      "scale": 0.97360284540915,
+      "offset": [
+        -214.09948281860008,
+        -72.1098567703138
+      ]
+    },
+    "frontendVersion": "1.23.4",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}
