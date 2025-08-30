@@ -76,12 +76,20 @@ def feature_process_from_images(
     Mirror of feature_process(video_path, ...) but sources frames from memory.
     Returns (visual_feats, text_feats, audio_len_in_s)
     """
+    # VRAM frame size cap
+    MAX_FRAMES = 64  # Limit the number of frames to 64
+
+    # Downsample the input frame list if too long
+    frames = images_uint8
+    if len(frames) > MAX_FRAMES:
+        step = np.ceil(len(frames) / MAX_FRAMES)
+        frames = frames[::int(step)]
+
     visual_feats, audio_len_in_s = encode_video_features_via_images(
-        frames_uint8=images_uint8,
+        frames_uint8=frames,  # Use downsampled frames
         model_dict=model_dict,
         fps_hint=fps_hint,
-        # keep conservative defaults for VRAM
-        max_frames=64,
+        max_frames=MAX_FRAMES,  # Keep it consistent with the limit
         siglip2_batch=4,
         syncformer_batch=1,
     )
@@ -103,8 +111,13 @@ def feature_process_from_images(
         "uncond_text_feat": uncond_text_feat,
     }
 
-    return visual_feats, text_feats, audio_len_in_s
+    # No need for AttributeDict here anymore, we are using plain dictionaries
+    visual_feats = {
+        "siglip2_feat": visual_feats["siglip2_feat"],
+        "syncformer_feat": visual_feats["syncformer_feat"]
+    }
 
+    return visual_feats, text_feats, audio_len_in_s
 
 @torch.inference_mode()
 def encode_video_with_sync_v2(x: torch.Tensor, model_dict, batch_size: int = -1):

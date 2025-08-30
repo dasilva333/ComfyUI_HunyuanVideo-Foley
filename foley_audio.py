@@ -2,7 +2,7 @@
 import os
 import sys
 from typing import List, Tuple
-
+import math
 import torch
 import numpy as np
 
@@ -14,9 +14,8 @@ if HVF_ROOT not in sys.path:
 
 # HunyuanVideo-Foley internals
 from hunyuanvideo_foley.utils.model_utils import load_model, denoise_process  # type: ignore
-# Import the functions from utils.py
-from utils import feature_process_from_images  # type: ignore
-
+# Import the functions from utils.py located in the same directory as foley_audio.py
+from .utils import feature_process_from_images  # type: ignore
 
 # --------------------------------------------------------------------------
 # Small cache so we don't reload weights every node execution
@@ -165,6 +164,15 @@ class HunyuanFoleyAudio:
         gpu_id: int = 0,
     ):
         frames = _images_tensor_to_uint8_list(images)
+        
+        # VRAM frame size cap
+        MAX_FRAMES = 64  # Limit the number of frames to 64
+
+        # If the number of frames exceeds MAX_FRAMES, downsample the frames
+        if len(frames) > MAX_FRAMES:
+            step = math.ceil(len(frames) / MAX_FRAMES)
+            frames = frames[::step]
+
         if len(frames) == 0:
             silent = torch.zeros(1, 1, 1, dtype=torch.float32)
             return ({"waveform": silent, "sample_rate": 44100},)
