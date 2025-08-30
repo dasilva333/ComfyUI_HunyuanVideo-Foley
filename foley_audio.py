@@ -14,8 +14,8 @@ if HVF_ROOT not in sys.path:
 
 # HunyuanVideo-Foley internals
 from hunyuanvideo_foley.utils.model_utils import load_model, denoise_process  # type: ignore
-# NOTE: you'll add these two functions into feature_utils.py (see below)
-from hunyuanvideo_foley.utils.feature_utils import feature_process_from_images  # type: ignore
+# Import the functions from utils.py
+from utils import feature_process_from_images  # type: ignore
 
 
 # --------------------------------------------------------------------------
