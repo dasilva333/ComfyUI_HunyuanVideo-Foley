@@ -107,6 +107,7 @@ class HunyuanFoleyAudio:
                 "config_path": ("STRING", {"default": config_path_default}),
                 "num_inference_steps": ("INT", {"default": 10, "min": 1, "max": 200, "step": 1}),
                 "guidance_scale": ("FLOAT", {"default": 4.5, "min": 0.0, "max": 20.0, "step": 0.1}),
+                "enabled": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 # Give manual control so you can keep it on GPU (default) or swap if needed.
@@ -150,9 +151,7 @@ class HunyuanFoleyAudio:
         )
         # match CLI return: first item
         return audio_batch[0], sample_rate
-
-    # foley_audio.py
-
+ 
     def generate(
         self,
         images: torch.Tensor,
@@ -162,9 +161,12 @@ class HunyuanFoleyAudio:
         config_path: str,
         num_inference_steps: int,
         guidance_scale: float,
+        enabled: bool = True,
         device: str = "cuda",
         gpu_id: int = 0,
     ):
+        if not enabled:
+            return (None,)   
         # --- ADD A TRY BLOCK HERE ---
         try:
             frames = _images_tensor_to_uint8_list(images)
