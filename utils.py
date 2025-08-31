@@ -1,3 +1,4 @@
+# utils.py
 import torch
 import numpy as np
 from PIL import Image
@@ -34,27 +35,35 @@ def encode_video_features_via_images(
     # PIL conversion once
     pil_list = [Image.fromarray(f).convert("RGB") for f in frames]
 
-    # ---- SigLIP2 path (expects 512x512 normalized) ----
-    siglip_list = [model_dict.siglip2_preprocess(im) for im in pil_list]  # [C,512,512], float
-    clip_frames = torch.stack(siglip_list, dim=0).unsqueeze(0).to(dev)     # [1,T,3,512,512]
-    siglip2_feat = encode_video_with_siglip2(
-        clip_frames, model_dict, batch_size=siglip2_batch
-    ).to(dev)
+    # utils.py, in encode_video_features_via_images
+    # ---- SigLIP2 path (with offloading) ----
+    siglip2_model = model_dict.siglip2_model
+    try:
+        print("Hunyuan Foley: Moving siglip2_model to GPU.")
+        siglip2_model.to(dev)
+        siglip_list = [model_dict.siglip2_preprocess(im) for im in pil_list]
+        clip_frames = torch.stack(siglip_list, dim=0).unsqueeze(0).to(dev)
+        siglip2_feat = encode_video_with_siglip2(clip_frames, model_dict, batch_size=siglip2_batch).to(dev)
+    finally:
+        print("Hunyuan Foley: Moving siglip2_model back to CPU.")
+        siglip2_model.to("cpu")
 
-    # --- Syncformer visual features (expects [B, T, 3, 224, 224]) ---
-    sync_list = []
-    for fr in frames:  # <-- was frames_sync (undefined). Use the downsampled `frames`.
-        im = Image.fromarray(fr).convert("RGB")
-        x = model_dict.syncformer_preprocess(im)  # -> torch.FloatTensor [3,224,224]
-        sync_list.append(x)
-
-    # stack along time axis (T), then add batch dim -> [1, T, 3, 224, 224]
-    sync_frames = torch.stack(sync_list, dim=0).unsqueeze(0).to(model_dict.device)
-
-    # encode (no fp16 autocast here; Syncformer runs in float32)
-    syncformer_feat = encode_video_with_sync_v2(
-        sync_frames, model_dict, batch_size=syncformer_batch  # <-- use your param
-    ).to(model_dict.device)
+    # utils.py, in encode_video_features_via_images
+    # --- Syncformer path (with offloading) ---
+    syncformer_model = model_dict.syncformer_model
+    try:
+        print("Hunyuan Foley: Moving syncformer_model to GPU.")
+        syncformer_model.to(dev)
+        sync_list = []
+        for fr in frames:
+            im = Image.fromarray(fr).convert("RGB")
+            x = model_dict.syncformer_preprocess(im)
+            sync_list.append(x)
+        sync_frames = torch.stack(sync_list, dim=0).unsqueeze(0).to(dev)
+        syncformer_feat = encode_video_with_sync_v2(sync_frames, model_dict, batch_size=syncformer_batch).to(dev)
+    finally:
+        print("Hunyuan Foley: Moving syncformer_model back to CPU.")
+        syncformer_model.to("cpu")
 
     vid_len_in_s = max(1.0, len(frames) / max(float(fps_hint), 1.0))
 
@@ -96,7 +105,12 @@ def feature_process_from_images(
 
     neg_prompt = "noisy, harsh"
     prompts = [neg_prompt, prompt]
-    text_feat_res, _ = encode_text_feat(prompts, model_dict)
+    clap_model = model_dict.clap_model
+    try:
+        clap_model.to(model_dict.device)
+        text_feat_res, _ = encode_text_feat(prompts, model_dict)
+    finally:
+        clap_model.to("cpu") # Ensure it's offloaded
 
     text_feat = text_feat_res[1:]
     uncond_text_feat = text_feat_res[:1]
@@ -134,6 +148,7 @@ def encode_video_with_sync_v2(x: torch.Tensor, model_dict, batch_size: int = -1)
     segments = [x[:, i*step_size : i*step_size + segment_size] for i in range(num_segments)]
     x = torch.stack(segments, dim=1)  # (B, S, T, 3, 224, 224)
 
+    # utils.py, in encode_video_with_sync_v2
     # Align to model device & dtype (typically float32)
     model = model_dict.syncformer_model
     target_param = next(model.parameters())

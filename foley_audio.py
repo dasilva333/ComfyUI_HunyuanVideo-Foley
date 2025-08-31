@@ -56,7 +56,17 @@ def _ensure_model_loaded(model_path_dir: str, config_path: str, device: str = "c
     if _STATE.model_key == key and _STATE.model_dict is not None:
         return _STATE.model_dict, _STATE.cfg
 
+    # This line loads everything to the GPU initially
     model_dict, cfg = load_model(model_path_dir, config_path, torch_device)
+
+    # --- ADD THIS OFFLOADING LOGIC ---
+    print("Hunyuan Foley: Offloading feature encoders to CPU to save VRAM.")
+    model_dict.siglip2_model.to("cpu")
+    model_dict.clap_model.to("cpu")
+    model_dict.syncformer_model.to("cpu")
+    # Keep foley_model and dac_model on the target device for now
+    # ---------------------------------
+
     _STATE.model_key = key
     _STATE.model_dict = model_dict
     _STATE.cfg = cfg
@@ -167,12 +177,35 @@ class HunyuanFoleyAudio:
     ):
         if not enabled:
             return (None,)   
+
+        # --- ADD THESE LINES AT THE VERY TOP ---
+        if torch.cuda.is_available():
+            print("Hunyuan Foley: Clearing CUDA cache before execution.")
+            torch.cuda.empty_cache()
+            
+            # --- ADD THIS VRAM LOGGING ---
+            total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            reserved_mem = torch.cuda.memory_reserved(0) / (1024**3)
+            alloc_mem = torch.cuda.memory_allocated(0) / (1024**3)
+            free_mem = total_mem - reserved_mem
+            print(f"Hunyuan Foley: VRAM Stats -> Total: {total_mem:.2f}GB, Reserved: {reserved_mem:.2f}GB, Allocated: {alloc_mem:.2f}GB, Free: {free_mem:.2f}GB")
+            # -----------------------------       
+
         # --- ADD A TRY BLOCK HERE ---
         try:
             frames = _images_tensor_to_uint8_list(images)
             
             # VRAM frame size cap
             MAX_FRAMES = 64  # Limit the number of frames to 64
+
+            # --- ADD THIS CHECK ---
+            MIN_FRAMES = 16
+            if len(frames) < MIN_FRAMES:
+                raise ValueError(
+                    f"Hunyuan Foley requires a minimum of {MIN_FRAMES} frames for the Syncformer model to work, "
+                    f"but the input only contained {len(frames)} frames. Please provide a longer image sequence."
+                )
+            # ----------------------
 
             # If the number of frames exceeds MAX_FRAMES, downsample the frames
             if len(frames) > MAX_FRAMES:
