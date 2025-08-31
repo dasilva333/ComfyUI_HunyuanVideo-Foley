@@ -167,3 +167,112 @@ def encode_video_with_sync_v2(x: torch.Tensor, model_dict, batch_size: int = -1)
     x = torch.cat(outputs, dim=0)              # [B*S, 1, 8, 768]
     x = rearrange(x, "(b s) 1 t d -> b (s t) d", b=b)
     return x
+
+
+# utils.py
+
+# ... (all your existing code from utils.py) ...
+
+
+# =================================================================================
+# FORKED MODEL LOADING LOGIC
+# Forked from hunyuanvideo_foley.utils.model_utils to apply memory-safe loading
+# =================================================================================
+import os
+from loguru import logger
+from torchvision import transforms
+from torchvision.transforms import v2
+from transformers import AutoTokenizer, AutoModel, ClapTextModelWithProjection
+from hunyuanvideo_foley.models.dac_vae.model.dac import DAC
+from hunyuanvideo_foley.models.synchformer import Synchformer
+from hunyuanvideo_foley.models.hifi_foley import HunyuanVideoFoley
+from hunyuanvideo_foley.utils.config_utils import load_yaml, AttributeDict
+from hunyuanvideo_foley.utils.model_utils import load_state_dict
+
+
+def load_model(model_path, config_path, device):
+    logger.info("Starting model loading process (custom memory-safe version)...")
+    logger.info(f"Configuration file: {config_path}")
+    logger.info(f"Model weights dir: {model_path}")
+    logger.info(f"Target device: {device}")
+    
+    cfg = load_yaml(config_path)
+    logger.info("Configuration loaded successfully")
+    
+    # HunyuanVideoFoley
+    logger.info("Loading HunyuanVideoFoley main model...")
+    foley_model = HunyuanVideoFoley(cfg, dtype=torch.bfloat16, device=device).to(device=device, dtype=torch.bfloat16)
+    foley_model = load_state_dict(foley_model, os.path.join(model_path, "hunyuanvideo_foley.pth"))
+    foley_model.eval()
+    logger.info("HunyuanVideoFoley model loaded and set to evaluation mode")
+
+    # DAC-VAE
+    dac_path = os.path.join(model_path, "vae_128d_48k.pth")
+    logger.info(f"Loading DAC VAE model from: {dac_path}")
+    dac_model = DAC.load(dac_path)
+    dac_model = dac_model.to(device)
+    dac_model.requires_grad_(False)
+    dac_model.eval()
+    logger.info("DAC VAE model loaded successfully")
+
+    # Siglip2 visual-encoder
+    logger.info("Loading SigLIP2 visual encoder...")
+    siglip2_preprocess = transforms.Compose([
+                transforms.Resize((512, 512)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            ])
+    # --- MEMORY FIX: Load to CPU first, then move to target device ---
+    siglip2_model = AutoModel.from_pretrained("google/siglip2-base-patch16-512").eval()
+    siglip2_model.to(device)
+    # ----------------------------------------------------------------
+    logger.info("SigLIP2 model and preprocessing pipeline loaded successfully")
+
+    # clap text-encoder
+    logger.info("Loading CLAP text encoder...")
+    clap_tokenizer = AutoTokenizer.from_pretrained("laion/larger_clap_general")
+    # --- MEMORY FIX: Load to CPU first, then move to target device ---
+    clap_model = ClapTextModelWithProjection.from_pretrained("laion/larger_clap_general")
+    clap_model.to(device)
+    # ----------------------------------------------------------------
+    logger.info("CLAP tokenizer and model loaded successfully")
+
+    # syncformer
+    syncformer_path = os.path.join(model_path, "synchformer_state_dict.pth")
+    logger.info(f"Loading Synchformer model from: {syncformer_path}")
+    syncformer_preprocess = v2.Compose(
+        [
+            v2.Resize(224, interpolation=v2.InterpolationMode.BICUBIC),
+            v2.CenterCrop(224),
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        ]
+    )
+
+    syncformer_model = Synchformer()
+    syncformer_model.load_state_dict(torch.load(syncformer_path, weights_only=False, map_location="cpu"))
+    syncformer_model = syncformer_model.to(device).eval()
+    logger.info("Synchformer model and preprocessing pipeline loaded successfully")
+
+
+    logger.info("Creating model dictionary with attribute access...")
+    model_dict = AttributeDict({
+        'foley_model': foley_model,
+        'dac_model': dac_model,
+        'siglip2_preprocess': siglip2_preprocess,
+        'siglip2_model': siglip2_model,
+        'clap_tokenizer': clap_tokenizer,
+        'clap_model': clap_model,
+        'syncformer_preprocess': syncformer_preprocess,
+        'syncformer_model': syncformer_model,
+        'device': device,
+    })
+    
+    logger.info("All models loaded successfully!")
+    logger.info("Available model components:")
+    for key in model_dict.keys():
+        logger.info(f"  - {key}")
+    logger.info("Models can be accessed via attribute notation (e.g., models.foley_model)")
+
+    return model_dict, cfg

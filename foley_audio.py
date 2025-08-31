@@ -13,9 +13,9 @@ if HVF_ROOT not in sys.path:
     sys.path.append(HVF_ROOT)
 
 # HunyuanVideo-Foley internals
-from hunyuanvideo_foley.utils.model_utils import load_model, denoise_process  # type: ignore
+from hunyuanvideo_foley.utils.model_utils import denoise_process  # type: ignore
 # Import the functions from utils.py located in the same directory as foley_audio.py
-from .utils import feature_process_from_images  # type: ignore
+from .utils import feature_process_from_images, load_model  # type: ignore
 
 # --------------------------------------------------------------------------
 # Small cache so we don't reload weights every node execution
@@ -235,17 +235,33 @@ class HunyuanFoleyAudio:
         
         # --- ADD THE FINALLY BLOCK HERE ---
         finally:
-            # Clean up any large tensors that might be lingering
+            # --- EXPANDED CLEANUP ---
+            print("Hunyuan Foley: Starting cleanup.")
+            # 1. Delete intermediate tensors to release references
             if 'audio_tensor' in locals():
                 del audio_tensor
             if 'waveform' in locals():
                 del waveform
             
-            # Force PyTorch to release cached memory
+            # 2. Offload the main models from GPU to CPU
+            # We check if the state and models exist before trying to move them.
+            global _STATE
+            if _STATE.model_dict is not None:
+                print("Hunyuan Foley: Offloading main models to CPU.")
+                if hasattr(_STATE.model_dict, 'foley_model'):
+                    _STATE.model_dict.foley_model.to("cpu")
+                if hasattr(_STATE.model_dict, 'dac_model'):
+                    _STATE.model_dict.dac_model.to("cpu")
+
+            # 3. Force PyTorch to release cached memory now that references are gone
             if torch.cuda.is_available():
+                print("Hunyuan Foley: Clearing CUDA cache after execution.")
                 torch.cuda.empty_cache()
             if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 torch.mps.empty_cache()
+            
+            print("Hunyuan Foley: Cleanup complete.")
+            # ------------------------
 
 
 # --------------------------------------------------------------------------
