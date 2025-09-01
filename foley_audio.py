@@ -142,6 +142,23 @@ class HunyuanFoleyAudio:
         num_inference_steps: int,
         fps_hint: float,
     ):
+        # --- THE CORRECTED LOGIC FOR YOUR FILE ---
+        # Get the target device where the main foley model is supposed to be.
+        # This is robustly stored in our global state object.
+        global _STATE
+        target_device = _STATE.device
+        print(f"[Hunyuan Foley] Verifying models are on target device: {target_device}")
+
+        # Before processing features, ensure all necessary models are on the target device.
+        # This corrects the state if ComfyUI has offloaded them between runs.
+        # These .to() calls are fast if the models are already on the correct device.
+        model_dict.foley_model.to(target_device)
+        model_dict.dac_model.to(target_device)
+        model_dict.siglip2_model.to(target_device)
+        model_dict.clap_model.to(target_device)
+        model_dict.syncformer_model.to(target_device)
+        # --- END OF FIX ---
+
         visual_feats, text_feats, audio_len_in_s = feature_process_from_images(
             images_uint8=images_uint8,
             prompt=prompt,
@@ -149,6 +166,12 @@ class HunyuanFoleyAudio:
             cfg=cfg,
             fps_hint=fps_hint,
         )
+
+        # After feature extraction, we can offload the encoders again to save VRAM during denoising.
+        print("[Hunyuan Foley] Offloading feature encoders to CPU before denoising.")
+        model_dict.siglip2_model.to("cpu")
+        model_dict.clap_model.to("cpu")
+        model_dict.syncformer_model.to("cpu")
 
         audio_batch, sample_rate = denoise_process(
             visual_feats,
@@ -161,7 +184,7 @@ class HunyuanFoleyAudio:
         )
         # match CLI return: first item
         return audio_batch[0], sample_rate
- 
+    
     def generate(
         self,
         images: torch.Tensor,
@@ -176,38 +199,40 @@ class HunyuanFoleyAudio:
         gpu_id: int = 0,
     ):
         if not enabled:
-            return (None,)   
+            return (None,)
 
-        # --- ADD THESE LINES AT THE VERY TOP ---
-        if torch.cuda.is_available():
-            print("Hunyuan Foley: Clearing CUDA cache before execution.")
-            torch.cuda.empty_cache()
-            
-            # --- ADD THIS VRAM LOGGING ---
-            total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            reserved_mem = torch.cuda.memory_reserved(0) / (1024**3)
-            alloc_mem = torch.cuda.memory_allocated(0) / (1024**3)
-            free_mem = total_mem - reserved_mem
-            print(f"Hunyuan Foley: VRAM Stats -> Total: {total_mem:.2f}GB, Reserved: {reserved_mem:.2f}GB, Allocated: {alloc_mem:.2f}GB, Free: {free_mem:.2f}GB")
-            # -----------------------------       
+        # Import the ComfyUI memory manager and Python's traceback module
+        import comfy.model_management as mm
+        import traceback
 
-        # --- ADD A TRY BLOCK HERE ---
+        # --- THE ROBUST ERROR HANDLING FIX (Your Suggestion) ---
+        # The entire logic is now wrapped in a try...except...finally block.
         try:
+            # --- AGGRESSIVE VRAM MANAGEMENT ---
+            print("Hunyuan Foley: Starting execution, preparing VRAM.")
+            mm.unload_all_models()
+            
+            if torch.cuda.is_available():
+                print("Hunyuan Foley: Clearing CUDA cache before model load.")
+                torch.cuda.empty_cache()
+                
+                total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                reserved_mem = torch.cuda.memory_reserved(0) / (1024**3)
+                alloc_mem = torch.cuda.memory_allocated(0) / (1024**3)
+                free_mem = total_mem - reserved_mem
+                print(f"Hunyuan Foley: VRAM Stats Post-Cleanup -> Total: {total_mem:.2f}GB, Reserved: {reserved_mem:.2f}GB, Free: {free_mem:.2f}GB")
+            # --- END VRAM MANAGEMENT ---
+
             frames = _images_tensor_to_uint8_list(images)
             
-            # VRAM frame size cap
-            MAX_FRAMES = 64  # Limit the number of frames to 64
-
-            # --- ADD THIS CHECK ---
+            MAX_FRAMES = 64
             MIN_FRAMES = 16
             if len(frames) < MIN_FRAMES:
                 raise ValueError(
                     f"Hunyuan Foley requires a minimum of {MIN_FRAMES} frames for the Syncformer model to work, "
                     f"but the input only contained {len(frames)} frames. Please provide a longer image sequence."
                 )
-            # ----------------------
 
-            # If the number of frames exceeds MAX_FRAMES, downsample the frames
             if len(frames) > MAX_FRAMES:
                 step = math.ceil(len(frames) / MAX_FRAMES)
                 frames = frames[::step]
@@ -216,44 +241,46 @@ class HunyuanFoleyAudio:
                 silent = torch.zeros(1, 1, 1, dtype=torch.float32)
                 return ({"waveform": silent, "sample_rate": 44100},)
 
-            # 1) Load / reuse model on requested device
             model_dict, cfg = _ensure_model_loaded(model_path_dir, config_path, device=device, gpu_id=gpu_id)
 
-            # 2) Infer (mirrors the original infer() flow, but from in-mem frames)
             audio_tensor, sample_rate = self._infer_from_images(
                 frames, audio_prompt, model_dict, cfg, guidance_scale, num_inference_steps, fps_hint=float(frame_rate)
             )
 
-            # 3) Shape to VHS expected format: [1, C, S] float32
             waveform = audio_tensor.to(torch.float32)
-            if waveform.ndim == 1:  # [S] -> [1,S]
+            if waveform.ndim == 1:
                 waveform = waveform.unsqueeze(0)
-            # audio is [C,S]; wrap batch dim
-            waveform = waveform.unsqueeze(0)  # [1, C, S]
+            waveform = waveform.unsqueeze(0)
 
             return ({"waveform": waveform, "sample_rate": int(sample_rate)},)
-        
-        # --- ADD THE FINALLY BLOCK HERE ---
-        finally:
-            # --- EXPANDED CLEANUP ---
-            print("Hunyuan Foley: Starting cleanup.")
-            # 1. Delete intermediate tensors to release references
-            if 'audio_tensor' in locals():
-                del audio_tensor
-            if 'waveform' in locals():
-                del waveform
+
+        except Exception as e:
+            # --- CATCH BLOCK ---
+            # If any exception occurs in the `try` block, this code will run.
+            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            print("!!! AN ERROR OCCURRED IN HUNYUAN FOLEY NODE !!!")
+            print("!!! The video generation will continue without audio. !!!")
+            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            # Print the full error traceback to the console for debugging later.
+            print(traceback.format_exc())
+            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
             
-            # 2. Offload the main models from GPU to CPU
-            # We check if the state and models exist before trying to move them.
+            # Return `(None,)` to gracefully disable audio output, just as if `enabled` was False.
+            return (None,)
+
+        finally:
+            # --- GUARANTEED CLEANUP ---
+            # This block will run whether the `try` succeeded or the `except` was triggered.
+            print("Hunyuan Foley: Starting guaranteed cleanup.")
+            if 'audio_tensor' in locals(): del audio_tensor
+            if 'waveform' in locals(): del waveform
+            
             global _STATE
             if _STATE.model_dict is not None:
                 print("Hunyuan Foley: Offloading main models to CPU.")
-                if hasattr(_STATE.model_dict, 'foley_model'):
-                    _STATE.model_dict.foley_model.to("cpu")
-                if hasattr(_STATE.model_dict, 'dac_model'):
-                    _STATE.model_dict.dac_model.to("cpu")
+                if hasattr(_STATE.model_dict, 'foley_model'): _STATE.model_dict.foley_model.to("cpu")
+                if hasattr(_STATE.model_dict, 'dac_model'): _STATE.model_dict.dac_model.to("cpu")
 
-            # 3. Force PyTorch to release cached memory now that references are gone
             if torch.cuda.is_available():
                 print("Hunyuan Foley: Clearing CUDA cache after execution.")
                 torch.cuda.empty_cache()
@@ -261,9 +288,7 @@ class HunyuanFoleyAudio:
                 torch.mps.empty_cache()
             
             print("Hunyuan Foley: Cleanup complete.")
-            # ------------------------
-
-
+            
 # --------------------------------------------------------------------------
 # ComfyUI registration
 # --------------------------------------------------------------------------
