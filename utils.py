@@ -189,7 +189,6 @@ from hunyuanvideo_foley.models.hifi_foley import HunyuanVideoFoley
 from hunyuanvideo_foley.utils.config_utils import load_yaml, AttributeDict
 from hunyuanvideo_foley.utils.model_utils import load_state_dict
 
-
 def load_model(model_path, config_path, device):
     logger.info("Starting model loading process (custom memory-safe version)...")
     logger.info(f"Configuration file: {config_path}")
@@ -199,47 +198,50 @@ def load_model(model_path, config_path, device):
     cfg = load_yaml(config_path)
     logger.info("Configuration loaded successfully")
     
-    # HunyuanVideoFoley
-    logger.info("Loading HunyuanVideoFoley main model...")
-    foley_model = HunyuanVideoFoley(cfg, dtype=torch.bfloat16, device=device).to(device=device, dtype=torch.bfloat16)
-    foley_model = load_state_dict(foley_model, os.path.join(model_path, "hunyuanvideo_foley.pth"))
-    foley_model.eval()
-    logger.info("HunyuanVideoFoley model loaded and set to evaluation mode")
+    model_dict = AttributeDict({})
 
-    # DAC-VAE
-    dac_path = os.path.join(model_path, "vae_128d_48k.pth")
-    logger.info(f"Loading DAC VAE model from: {dac_path}")
-    dac_model = DAC.load(dac_path)
-    dac_model = dac_model.to(device)
+    # --- MEMORY-SAFE SEQUENTIAL LOADING ---
+
+    # 1. HunyuanVideoFoley
+    logger.info("Loading HunyuanVideoFoley main model (CPU -> GPU)...")
+    foley_model = HunyuanVideoFoley(cfg, dtype=torch.bfloat16, device="cpu").to(dtype=torch.bfloat16)
+    foley_model = load_state_dict(foley_model, os.path.join(model_path, cfg.model_weights_path.foley_model))
+    foley_model.to(device).eval()
+    if device.type == 'cuda': torch.cuda.empty_cache()
+    logger.info("HunyuanVideoFoley model loaded.")
+
+    # 2. DAC-VAE
+    logger.info(f"Loading DAC VAE model (CPU -> GPU)...")
+    dac_path = os.path.join(model_path, cfg.model_weights_path.dac_model)
+    dac_model = DAC.load(dac_path, map_location="cpu")
+    dac_model.to(device).eval()
     dac_model.requires_grad_(False)
-    dac_model.eval()
-    logger.info("DAC VAE model loaded successfully")
+    if device.type == 'cuda': torch.cuda.empty_cache()
+    logger.info("DAC VAE model loaded.")
 
-    # Siglip2 visual-encoder
-    logger.info("Loading SigLIP2 visual encoder...")
+    # 3. Siglip2 visual-encoder
+    logger.info("Loading SigLIP2 visual encoder (CPU -> GPU)...")
     siglip2_preprocess = transforms.Compose([
                 transforms.Resize((512, 512)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
             ])
-    # --- MEMORY FIX: Load to CPU first, then move to target device ---
-    siglip2_model = AutoModel.from_pretrained("google/siglip2-base-patch16-512").eval()
+    siglip2_model = AutoModel.from_pretrained(cfg.model.image_tokenizer_path).eval().to("cpu")
     siglip2_model.to(device)
-    # ----------------------------------------------------------------
-    logger.info("SigLIP2 model and preprocessing pipeline loaded successfully")
+    if device.type == 'cuda': torch.cuda.empty_cache()
+    logger.info("SigLIP2 model loaded.")
 
-    # clap text-encoder
-    logger.info("Loading CLAP text encoder...")
-    clap_tokenizer = AutoTokenizer.from_pretrained("laion/larger_clap_general")
-    # --- MEMORY FIX: Load to CPU first, then move to target device ---
-    clap_model = ClapTextModelWithProjection.from_pretrained("laion/larger_clap_general")
+    # 4. clap text-encoder
+    logger.info("Loading CLAP text encoder (CPU -> GPU)...")
+    clap_tokenizer = AutoTokenizer.from_pretrained(cfg.model.text_tokenizer_path)
+    clap_model = ClapTextModelWithProjection.from_pretrained(cfg.model.text_tokenizer_path).to("cpu")
     clap_model.to(device)
-    # ----------------------------------------------------------------
-    logger.info("CLAP tokenizer and model loaded successfully")
+    if device.type == 'cuda': torch.cuda.empty_cache()
+    logger.info("CLAP model loaded.")
 
-    # syncformer
-    syncformer_path = os.path.join(model_path, "synchformer_state_dict.pth")
-    logger.info(f"Loading Synchformer model from: {syncformer_path}")
+    # 5. syncformer
+    logger.info(f"Loading Synchformer model (CPU -> GPU)...")
+    syncformer_path = os.path.join(model_path, cfg.model_weights_path.syncformer_model)
     syncformer_preprocess = v2.Compose(
         [
             v2.Resize(224, interpolation=v2.InterpolationMode.BICUBIC),
@@ -249,30 +251,28 @@ def load_model(model_path, config_path, device):
             v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
         ]
     )
+    syncformer_model = Synchformer().to("cpu")
+    syncformer_model.load_state_dict(torch.load(syncformer_path, map_location="cpu"))
+    syncformer_model.to(device).eval()
+    if device.type == 'cuda': torch.cuda.empty_cache()
+    logger.info("Synchformer model loaded.")
 
-    syncformer_model = Synchformer()
-    syncformer_model.load_state_dict(torch.load(syncformer_path, weights_only=False, map_location="cpu"))
-    syncformer_model = syncformer_model.to(device).eval()
-    logger.info("Synchformer model and preprocessing pipeline loaded successfully")
-
+    # --- END OF SEQUENTIAL LOADING ---
 
     logger.info("Creating model dictionary with attribute access...")
-    model_dict = AttributeDict({
-        'foley_model': foley_model,
-        'dac_model': dac_model,
-        'siglip2_preprocess': siglip2_preprocess,
-        'siglip2_model': siglip2_model,
-        'clap_tokenizer': clap_tokenizer,
-        'clap_model': clap_model,
-        'syncformer_preprocess': syncformer_preprocess,
-        'syncformer_model': syncformer_model,
-        'device': device,
-    })
+    model_dict.foley_model = foley_model
+    model_dict.dac_model = dac_model
+    model_dict.siglip2_preprocess = siglip2_preprocess
+    model_dict.siglip2_model = siglip2_model
+    model_dict.clap_tokenizer = clap_tokenizer
+    model_dict.clap_model = clap_model
+    model_dict.syncformer_preprocess = syncformer_preprocess
+    model_dict.syncformer_model = syncformer_model
+    model_dict.device = device
     
     logger.info("All models loaded successfully!")
     logger.info("Available model components:")
     for key in model_dict.keys():
         logger.info(f"  - {key}")
-    logger.info("Models can be accessed via attribute notation (e.g., models.foley_model)")
 
     return model_dict, cfg

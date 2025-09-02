@@ -132,6 +132,7 @@ class HunyuanFoleyAudio:
     CATEGORY = "Hunyuan Foley"
 
     # --- mirror infer() -> denoise like the reference CLI -------------------
+# In foley_audio.py
     def _infer_from_images(
         self,
         images_uint8: List[np.ndarray],
@@ -142,23 +143,25 @@ class HunyuanFoleyAudio:
         num_inference_steps: int,
         fps_hint: float,
     ):
-        # --- THE CORRECTED LOGIC FOR YOUR FILE ---
-        # Get the target device where the main foley model is supposed to be.
-        # This is robustly stored in our global state object.
         global _STATE
         target_device = _STATE.device
         print(f"[Hunyuan Foley] Verifying models are on target device: {target_device}")
 
-        # Before processing features, ensure all necessary models are on the target device.
-        # This corrects the state if ComfyUI has offloaded them between runs.
-        # These .to() calls are fast if the models are already on the correct device.
-        model_dict.foley_model.to(target_device)
-        model_dict.dac_model.to(target_device)
-        model_dict.siglip2_model.to(target_device)
-        model_dict.clap_model.to(target_device)
-        model_dict.syncformer_model.to(target_device)
-        # --- END OF FIX ---
+        # --- MEMORY-SAFE MODEL MOVEMENT ---
+        # Instead of moving all at once, move them one by one, clearing cache in between.
+        # This prevents a VRAM spike if multiple models were offloaded.
+        def safe_to_device(model):
+            model.to(target_device)
+            if target_device.type == 'cuda':
+                torch.cuda.empty_cache()
 
+        safe_to_device(model_dict.foley_model)
+        safe_to_device(model_dict.dac_model)
+        safe_to_device(model_dict.siglip2_model)
+        safe_to_device(model_dict.clap_model)
+        safe_to_device(model_dict.syncformer_model)
+        # --- END OF FIX ---
+        
         visual_feats, text_feats, audio_len_in_s = feature_process_from_images(
             images_uint8=images_uint8,
             prompt=prompt,
@@ -167,7 +170,6 @@ class HunyuanFoleyAudio:
             fps_hint=fps_hint,
         )
 
-        # After feature extraction, we can offload the encoders again to save VRAM during denoising.
         print("[Hunyuan Foley] Offloading feature encoders to CPU before denoising.")
         model_dict.siglip2_model.to("cpu")
         model_dict.clap_model.to("cpu")
@@ -182,7 +184,7 @@ class HunyuanFoleyAudio:
             guidance_scale=guidance_scale,
             num_inference_steps=int(num_inference_steps),
         )
-        # match CLI return: first item
+
         return audio_batch[0], sample_rate
     
     def generate(
