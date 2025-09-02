@@ -168,12 +168,6 @@ def encode_video_with_sync_v2(x: torch.Tensor, model_dict, batch_size: int = -1)
     x = rearrange(x, "(b s) 1 t d -> b (s t) d", b=b)
     return x
 
-
-# utils.py
-
-# ... (all your existing code from utils.py) ...
-
-
 # =================================================================================
 # FORKED MODEL LOADING LOGIC
 # Forked from hunyuanvideo_foley.utils.model_utils to apply memory-safe loading
@@ -200,19 +194,22 @@ def load_model(model_path, config_path, device):
     
     model_dict = AttributeDict({})
 
-    # --- MEMORY-SAFE SEQUENTIAL LOADING ---
+    # --- MEMORY-SAFE SEQUENTIAL LOADING (Corrected Paths) ---
 
     # 1. HunyuanVideoFoley
     logger.info("Loading HunyuanVideoFoley main model (CPU -> GPU)...")
+    # Initialize on CPU
     foley_model = HunyuanVideoFoley(cfg, dtype=torch.bfloat16, device="cpu").to(dtype=torch.bfloat16)
-    foley_model = load_state_dict(foley_model, os.path.join(model_path, cfg.model_weights_path.foley_model))
+    # Load weights into CPU model
+    foley_model = load_state_dict(foley_model, os.path.join(model_path, "hunyuanvideo_foley.pth"))
+    # Move fully loaded model to GPU
     foley_model.to(device).eval()
     if device.type == 'cuda': torch.cuda.empty_cache()
     logger.info("HunyuanVideoFoley model loaded.")
 
     # 2. DAC-VAE
     logger.info(f"Loading DAC VAE model (CPU -> GPU)...")
-    dac_path = os.path.join(model_path, cfg.model_weights_path.dac_model)
+    dac_path = os.path.join(model_path, "vae_128d_48k.pth")
     dac_model = DAC.load(dac_path, map_location="cpu")
     dac_model.to(device).eval()
     dac_model.requires_grad_(False)
@@ -226,22 +223,22 @@ def load_model(model_path, config_path, device):
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
             ])
-    siglip2_model = AutoModel.from_pretrained(cfg.model.image_tokenizer_path).eval().to("cpu")
+    siglip2_model = AutoModel.from_pretrained("google/siglip2-base-patch16-512").eval().to("cpu")
     siglip2_model.to(device)
     if device.type == 'cuda': torch.cuda.empty_cache()
     logger.info("SigLIP2 model loaded.")
 
     # 4. clap text-encoder
     logger.info("Loading CLAP text encoder (CPU -> GPU)...")
-    clap_tokenizer = AutoTokenizer.from_pretrained(cfg.model.text_tokenizer_path)
-    clap_model = ClapTextModelWithProjection.from_pretrained(cfg.model.text_tokenizer_path).to("cpu")
+    clap_tokenizer = AutoTokenizer.from_pretrained("laion/larger_clap_general")
+    clap_model = ClapTextModelWithProjection.from_pretrained("laion/larger_clap_general").to("cpu")
     clap_model.to(device)
     if device.type == 'cuda': torch.cuda.empty_cache()
     logger.info("CLAP model loaded.")
 
     # 5. syncformer
     logger.info(f"Loading Synchformer model (CPU -> GPU)...")
-    syncformer_path = os.path.join(model_path, cfg.model_weights_path.syncformer_model)
+    syncformer_path = os.path.join(model_path, "synchformer_state_dict.pth")
     syncformer_preprocess = v2.Compose(
         [
             v2.Resize(224, interpolation=v2.InterpolationMode.BICUBIC),
